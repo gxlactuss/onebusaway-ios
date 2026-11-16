@@ -242,6 +242,11 @@ public class RegionsService: NSObject, LocationServiceDelegate {
                 return nil
             }
             if let region = find(id: identifier) {
+                // An untrusted list, such as the bundled one, can still hold a retired region.
+                if !canTrustRegionsList, region.isCustom != true,
+                   RegionsService.isDroppedRegionIdentifier(identifier, userDefaults: userDefaults) {
+                    return nil
+                }
                 return region
             }
 
@@ -604,11 +609,22 @@ public class RegionsService: NSObject, LocationServiceDelegate {
 
     private func clearRetiredRegionFallback() {
         guard canTrustRegionsList,
-              let identifier = userDefaults.object(forKey: RegionsService.currentRegionIdentifierUserDefaultsKey) as? Int,
-              find(id: identifier) == nil,
-              (try? fileStorage.loadCustomRegions()) != nil else { return }
+              let identifier = userDefaults.object(forKey: RegionsService.currentRegionIdentifierUserDefaultsKey) as? Int else { return }
 
-        ResolvedRegionStore(userDefaults: userDefaults).write(nil)
+        if regions.contains(where: { $0.regionIdentifier == identifier }) {
+            RegionsService.removeDroppedRegionIdentifier(identifier, userDefaults: userDefaults)
+            return
+        }
+
+        // One read decides both that custom regions are readable and that this one is absent.
+        guard let customRegions = try? fileStorage.loadCustomRegions(),
+              !customRegions.contains(where: { $0.regionIdentifier == identifier }) else { return }
+
+        // The selected custom region cannot be deleted, so a missing one means its file failed to load.
+        let store = ResolvedRegionStore(userDefaults: userDefaults)
+        if let cached = store.storedRegion, cached.regionIdentifier == identifier, cached.isCustom == true { return }
+
+        store.write(nil)
         RegionsService.recordDroppedRegionIdentifier(identifier, userDefaults: userDefaults)
     }
 
